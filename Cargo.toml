@@ -1,10 +1,10 @@
 [package]
 name = "theyuleman"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
-dotenv = "0.15.0"
+dotenvy = "0.15.7"
 poise = "0.7.1"
 rig-agent = { version = "0.44.0" }
 rig-llama-cpp = { version = "0.6.0", features = ["cuda"] }

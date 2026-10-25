@@ -2,7 +2,6 @@ mod cached_sound;
 mod commands;
 mod util;
 
-use dotenv::dotenv;
 use poise::{
     Framework, FrameworkOptions,
     samples::{register_globally, register_in_guild},
@@ -37,7 +36,7 @@ const ACCENT: Colour = Colour(0xffde59);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dotenv().ok();
+    dotenvy::dotenv()?;
 
     let model = Arc::from(
         Client::builder("./models/Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-Q4_K_M.gguf")
