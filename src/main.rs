@@ -9,6 +9,7 @@ use poise::{
         ActivityData, ClientBuilder, Colour, GatewayIntents, GuildId, OnlineStatus,
     },
 };
+#[cfg(feature = "ai")]
 use rig_llama_cpp::Client;
 use songbird::{
     SerenityInit,
@@ -19,7 +20,7 @@ use songbird::{
     },
 };
 use std::{collections::HashMap, env, sync::Arc};
-use tokio::{fs, sync::Mutex};
+use tokio::sync::Mutex;
 
 use crate::{cached_sound::CachedSound, commands::*};
 
@@ -27,7 +28,10 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
 struct Data {
+    http_client: reqwest::Client,
+    #[cfg(feature = "ai")]
     model: Arc<Client>,
+    #[cfg(feature = "ai")]
     model_context: Vec<String>,
     sound_store: Arc<Mutex<HashMap<String, CachedSound>>>,
 }
@@ -38,21 +42,30 @@ const ACCENT: Colour = Colour(0xffde59);
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv()?;
 
+    let http_client = reqwest::Client::new();
+
+    #[cfg(feature = "ai")]
     let model = Arc::from(
         Client::builder("./models/Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-Q4_K_M.gguf")
             .n_ctx(8192)
             .build()?,
     );
 
+    #[cfg(feature = "ai")]
     let mut model_context = vec![];
 
-    let mut file_iter = fs::read_dir("./context").await.into_iter();
-    while let Some(mut file) = file_iter.next() {
-        let entry = file.next_entry().await?.unwrap();
-        let entry_type = entry.file_type().await?;
+    #[cfg(feature = "ai")]
+    {
+        use std::fs;
 
-        if entry_type.is_file() {
-            model_context.push(fs::read_to_string(entry.path()).await?);
+        let mut file_iter = fs::read_dir("./context").await.into_iter();
+        while let Some(mut file) = file_iter.next() {
+            let entry = file.next_entry().await?.unwrap();
+            let entry_type = entry.file_type().await?;
+
+            if entry_type.is_file() {
+                model_context.push(fs::read_to_string(entry.path()).await?);
+            }
         }
     }
 
@@ -78,7 +91,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let framework = Framework::builder()
         .options(FrameworkOptions {
-            commands: vec![ping(), info(), join(), leave(), tikitiki(), chat()],
+            commands: vec![
+                ping(),
+                info(),
+                join(),
+                leave(),
+                tikitiki(),
+                #[cfg(feature = "ai")]
+                chat(),
+            ],
             on_error: |err| {
                 Box::pin(async move {
                     println!("Error: {}", err);
@@ -102,7 +123,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
 
                 Ok(Data {
+                    http_client: http_client.clone(),
+                    #[cfg(feature = "ai")]
                     model,
+                    #[cfg(feature = "ai")]
                     model_context,
                     sound_store: Arc::new(Mutex::new(audio_map)),
                 })

@@ -6,10 +6,16 @@ edition = "2024"
 [dependencies]
 dotenvy = "0.15.7"
 poise = "0.7.1"
-rig-agent = { version = "0.44.0" }
-rig-llama-cpp = { version = "0.6.0", features = ["cuda"] }
+# Make sure this matches songbird's reqwest
+reqwest = "0.12.28"
+rig-agent = { version = "0.44.0", optional = true }
+rig-llama-cpp = { version = "0.6.0", features = ["cuda"], optional = true }
 songbird = "0.6.1"
 tokio = { version = "1.52.3", features = ["rt-multi-thread"] }
+
+[features]
+default = []
+ai = ["dep:rig-agent", "dep:rig-llama-cpp"]
 
 [dependencies.symphonia]
 version = "0.5.2"

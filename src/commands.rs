@@ -2,11 +2,13 @@ use poise::{
     CreateReply, command,
     serenity_prelude::{CreateEmbed, CreateEmbedAuthor, CreateMessage, Timestamp, User},
 };
-use rig_agent::AgentBuilder; //use rig_core::{client::completion::CompletionClient, completion::Prompt};
+#[cfg(feature = "ai")]
+use rig_agent::AgentBuilder;
+use songbird::{TrackEvent, input::YoutubeDl}; //use rig_core::{client::completion::CompletionClient, completion::Prompt};
 
 use crate::{
     ACCENT, Context, Error,
-    util::{send_error, send_message, voice},
+    util::{TrackErrorNotifier, send_error, send_message, voice},
 };
 
 /// Ping The Yule Man
@@ -68,20 +70,23 @@ pub async fn info(
 #[command(slash_command)]
 pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
     if let Some((manager, guild_id, channel_id)) = voice(ctx).await {
-        send_message(
-            ctx,
-            format!(
-                "Joined `{}`",
-                channel_id
-                    .name(ctx.http())
-                    .await
-                    .unwrap_or("unknown channel".into())
-            ),
-        )
-        .await?;
-
         // This seems to hang so send the join message before this.
-        manager.join(guild_id, channel_id).await?;
+        if let Ok(handler_lock) = manager.join(guild_id, channel_id).await {
+            send_message(
+                ctx,
+                format!(
+                    "Joined `{}`",
+                    channel_id
+                        .name(ctx.http())
+                        .await
+                        .unwrap_or("unknown channel".into())
+                ),
+            )
+            .await?;
+
+            let mut handler = handler_lock.lock().await;
+            handler.add_global_event(TrackEvent::Error.into(), TrackErrorNotifier);
+        }
     }
 
     Ok(())
@@ -121,15 +126,29 @@ pub async fn tikitiki(ctx: Context<'_>) -> Result<(), Error> {
         if let Some(handler_lock) = manager.get(guild_id) {
             let mut handler = handler_lock.lock().await;
 
-            let sources_lock = ctx.data().sound_store.clone();
-            let sources = sources_lock.lock().await;
-            let source = sources
-                .get("tikitiki")
-                .expect("Handle placed into cache at startup.");
+            // let src = YoutubeDl::new(
+            //     ctx.data().http_client.clone(),
+            //     "https://www.youtube.com/watch?v=DQ1vMfn-x4w",
+            // );
 
-            let song = handler.play_input(source.into());
+            // println!("aaa {:?}", src);
+
+            // let _ = handler.play_input(src.clone().into());
+
+            let source = songbird::input::File::new("./audio/tikitiki.ogg");
+            handler.play_input(source.into());
+
+            // let sources_lock = ctx.data().sound_store.clone();
+            // let sources = sources_lock.lock().await;
+            // let source = sources
+            //     .get("tikitiki")
+            //     .expect("Handle placed into cache at startup.");
+
+            // let song = handler.play_input(source.into());
             // let _ = song.set_volume(1.0);
             // let _ = song.enable_loop();
+            // let _ = song.pause();
+            // let _ = song.play();
 
             send_message(ctx, "Playing Tiki Tiki").await?;
         } else {
@@ -145,6 +164,7 @@ pub async fn tikitiki(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Chat with The Yule Man
+#[cfg(feature = "ai")]
 #[command(slash_command)]
 pub async fn chat(
     ctx: Context<'_>,
