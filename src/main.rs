@@ -1,48 +1,56 @@
-mod cached_sound;
-mod commands;
-mod util;
+#[macro_use]
+extern crate tracing;
 
-use poise::{
-    Framework, FrameworkOptions,
-    samples::{register_globally, register_in_guild},
-    serenity_prelude::{
-        ActivityData, ClientBuilder, Colour, GatewayIntents, GuildId, OnlineStatus,
-    },
-};
+use lavalink_rs::{model::events, prelude::*};
+use poise::serenity_prelude::{self as serenity, ActivityData, Colour, OnlineStatus};
 #[cfg(feature = "ai")]
 use rig_llama_cpp::Client;
-use songbird::{
-    SerenityInit,
-    driver::Bitrate,
-    input::{
-        File,
-        cached::{Compressed, Memory},
-    },
-};
-use std::{collections::HashMap, env, sync::Arc};
-use tokio::sync::Mutex;
+use songbird::SerenityInit;
+use std::env;
+#[cfg(feature = "ai")]
+use std::sync::Arc;
 
-use crate::{cached_sound::CachedSound, commands::*};
+pub mod commands;
+pub mod music_advanced;
+pub mod music_basic;
+pub mod music_events;
+pub mod util;
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
-type Context<'a> = poise::Context<'a, Data, Error>;
-
-struct Data {
-    http_client: reqwest::Client,
+pub struct Data {
     #[cfg(feature = "ai")]
     model: Arc<Client>,
     #[cfg(feature = "ai")]
     model_context: Vec<String>,
-    sound_store: Arc<Mutex<HashMap<String, CachedSound>>>,
+    lavalink: LavalinkClient,
 }
 
 const ACCENT: Colour = Colour(0xffde59);
 
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+pub type Context<'a> = poise::Context<'a, Data, Error>;
+
+/// Test
+#[poise::command(prefix_command)]
+async fn test(ctx: Context<'_>) -> Result<(), Error> {
+    let lava_client = ctx.data().lavalink.clone();
+
+    let node = lava_client.get_node_by_index(0).unwrap();
+    dbg!(node.http.info().await?);
+
+    ctx.say("all good!").await?;
+
+    Ok(())
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Error> {
     dotenvy::dotenv()?;
 
-    let http_client = reqwest::Client::new();
+    unsafe {
+        env::set_var("RUST_LOG", "info,lavalink_rs=trace");
+    }
+
+    tracing_subscriber::fmt::init();
 
     #[cfg(feature = "ai")]
     let model = Arc::from(
@@ -56,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "ai")]
     {
-        use std::fs;
+        use tokio::fs;
 
         let mut file_iter = fs::read_dir("./context").await.into_iter();
         while let Some(mut file) = file_iter.next() {
@@ -69,51 +77,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut audio_map = HashMap::new();
-
-    {
-        let tikitiki_src = Memory::new(File::new("./audio/tikitiki.ogg").into())
-            .await
-            .expect("These parameters are well-defined.");
-        let _ = tikitiki_src.raw.spawn_loader();
-        audio_map.insert("tikitiki".into(), CachedSound::Uncompressed(tikitiki_src));
-
-        // let song_src = Compressed::new(
-        //     File::new("./audio/tikitiki.ogg").into(),
-        //     Bitrate::Bits(128_000),
-        // )
-        // .await
-        // .expect("These parameters are well-defined.");
-        // let _ = song_src.raw.spawn_loader();
-
-        // audio_map.insert("tikitiki".into(), CachedSound::Compressed(song_src));
-    }
-
-    let framework = Framework::builder()
-        .options(FrameworkOptions {
+    let framework = poise::Framework::builder()
+        .options(poise::FrameworkOptions {
             commands: vec![
-                ping(),
-                info(),
-                join(),
-                leave(),
-                tikitiki(),
-                #[cfg(feature = "ai")]
-                chat(),
+                music_basic::play(),
+                music_basic::join(),
+                music_basic::leave(),
+                music_advanced::queue(),
+                music_advanced::skip(),
+                music_advanced::pause(),
+                music_advanced::resume(),
+                music_advanced::stop(),
+                music_advanced::seek(),
+                music_advanced::clear(),
+                music_advanced::remove(),
+                music_advanced::swap(),
+                crate::test(),
+                commands::ping(),
+                commands::info(),
+                commands::chat(),
             ],
             on_error: |err| {
                 Box::pin(async move {
                     println!("Error: {}", err);
                 })
             },
-            ..FrameworkOptions::default()
+            prefix_options: poise::PrefixFrameworkOptions {
+                prefix: Some("!".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         })
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
-                register_globally(ctx, &framework.options().commands).await?;
-                register_in_guild(
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                poise::builtins::register_in_guild(
                     ctx,
                     &framework.options().commands,
-                    GuildId::new(
+                    serenity::GuildId::new(
                         env::var("DEV_GUILD")
                             .expect("missing DEV_GUILD")
                             .parse()
@@ -122,28 +123,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?;
 
+                let events = events::Events {
+                    raw: Some(music_events::raw_event),
+                    ready: Some(music_events::ready_event),
+                    track_start: Some(music_events::track_start),
+                    track_end: Some(music_events::track_end),
+                    ..Default::default()
+                };
+
+                let node_local = NodeBuilder {
+                    hostname: "localhost:2333".to_string(),
+                    is_ssl: false,
+                    events: events::Events::default(),
+                    password: env::var("LAVALINK_PASSWORD").expect("missing LAVALINK_PASSWORD"),
+                    user_id: ctx.cache.current_user().id.into(),
+                    session_id: None,
+                };
+
+                let client = LavalinkClient::new(
+                    events,
+                    vec![node_local],
+                    NodeDistributionStrategy::round_robin(),
+                )
+                .await;
+
                 Ok(Data {
-                    http_client: http_client.clone(),
                     #[cfg(feature = "ai")]
                     model,
                     #[cfg(feature = "ai")]
                     model_context,
-                    sound_store: Arc::new(Mutex::new(audio_map)),
+                    lavalink: client,
                 })
             })
         })
         .build();
 
-    let client = ClientBuilder::new(
+    let mut client = serenity::ClientBuilder::new(
         env::var("TOKEN").expect("missing TOKEN"),
-        GatewayIntents::privileged(),
+        serenity::GatewayIntents::all(),
     )
-    .framework(framework)
     .register_songbird()
+    .framework(framework)
     .activity(ActivityData::custom("Watching you sleep"))
     .status(OnlineStatus::Idle)
-    .await;
-    client.unwrap().start().await.unwrap();
+    .await?;
+
+    client.start().await?;
 
     Ok(())
 }

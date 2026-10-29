@@ -2,6 +2,6 @@
 
 title The Yule Man
 
-cargo run -r
+cargo run -r --all-features
 
 pause

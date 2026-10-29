@@ -1,18 +1,18 @@
+#[cfg(feature = "ai")]
+use poise::serenity_prelude::CreateMessage;
 use poise::{
     CreateReply, command,
-    serenity_prelude::{CreateEmbed, CreateEmbedAuthor, CreateMessage, Timestamp, User},
+    serenity_prelude::{CreateEmbed, CreateEmbedAuthor, Timestamp, User},
 };
 #[cfg(feature = "ai")]
 use rig_agent::AgentBuilder;
-use songbird::{TrackEvent, input::YoutubeDl}; //use rig_core::{client::completion::CompletionClient, completion::Prompt};
 
-use crate::{
-    ACCENT, Context, Error,
-    util::{TrackErrorNotifier, send_error, send_message, voice},
-};
+#[cfg(not(feature = "ai"))]
+use crate::util::send_message;
+use crate::{ACCENT, Context, Error, util::send_error};
 
 /// Ping The Yule Man
-#[command(slash_command)]
+#[command(slash_command, prefix_command)]
 pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
     let embed = CreateEmbed::new()
         .color(ACCENT)
@@ -25,7 +25,7 @@ pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Retrive your or another user's information
-#[command(slash_command)]
+#[command(slash_command, prefix_command)]
 pub async fn info(
     ctx: Context<'_>,
     #[description = "User to retrive the information for"] user: Option<User>,
@@ -66,146 +66,55 @@ pub async fn info(
     Ok(())
 }
 
-/// Have The Yule Man join your current voice channel
-#[command(slash_command)]
-pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
-    if let Some((manager, guild_id, channel_id)) = voice(ctx).await {
-        // This seems to hang so send the join message before this.
-        if let Ok(handler_lock) = manager.join(guild_id, channel_id).await {
-            send_message(
-                ctx,
-                format!(
-                    "Joined `{}`",
-                    channel_id
-                        .name(ctx.http())
-                        .await
-                        .unwrap_or("unknown channel".into())
-                ),
-            )
-            .await?;
-
-            let mut handler = handler_lock.lock().await;
-            handler.add_global_event(TrackEvent::Error.into(), TrackErrorNotifier);
-        }
-    }
-
-    Ok(())
-}
-
-/// Have The Yule Man leave its voice channel
-#[command(slash_command)]
-pub async fn leave(ctx: Context<'_>) -> Result<(), Error> {
-    if let Some((manager, guild_id, channel_id)) = voice(ctx).await {
-        match manager.leave(guild_id).await {
-            Ok(..) => {
-                send_message(
-                    ctx,
-                    format!(
-                        "Left `{}`",
-                        channel_id
-                            .name(ctx.http())
-                            .await
-                            .unwrap_or("unknown channel".into())
-                    ),
-                )
-                .await?
-            }
-            Err(err) => send_error(ctx, format!("Failed to leave voice channel: {}", err)).await?,
-        }
-    }
-
-    Ok(())
-}
-
-/// Tiki Tiki
-#[command(slash_command)]
-pub async fn tikitiki(ctx: Context<'_>) -> Result<(), Error> {
-    if let Some((manager, guild_id, ..)) = voice(ctx).await {
-        ctx.defer().await?;
-
-        if let Some(handler_lock) = manager.get(guild_id) {
-            let mut handler = handler_lock.lock().await;
-
-            // let src = YoutubeDl::new(
-            //     ctx.data().http_client.clone(),
-            //     "https://www.youtube.com/watch?v=DQ1vMfn-x4w",
-            // );
-
-            // println!("aaa {:?}", src);
-
-            // let _ = handler.play_input(src.clone().into());
-
-            let source = songbird::input::File::new("./audio/tikitiki.ogg");
-            handler.play_input(source.into());
-
-            // let sources_lock = ctx.data().sound_store.clone();
-            // let sources = sources_lock.lock().await;
-            // let source = sources
-            //     .get("tikitiki")
-            //     .expect("Handle placed into cache at startup.");
-
-            // let song = handler.play_input(source.into());
-            // let _ = song.set_volume(1.0);
-            // let _ = song.enable_loop();
-            // let _ = song.pause();
-            // let _ = song.play();
-
-            send_message(ctx, "Playing Tiki Tiki").await?;
-        } else {
-            send_error(
-                ctx,
-                "Failed to play Tiki Tiki. Hint: am I in a voice channel?",
-            )
-            .await?;
-        }
-    }
-
-    Ok(())
-}
-
 /// Chat with The Yule Man
-#[cfg(feature = "ai")]
-#[command(slash_command)]
+#[allow(unused_variables)]
+#[command(slash_command, prefix_command)]
 pub async fn chat(
     ctx: Context<'_>,
     #[description = "Message to ask The Yule Man"] message: String,
 ) -> Result<(), Error> {
-    ctx.defer().await?;
+    #[cfg(feature = "ai")]
+    {
+        ctx.defer().await?;
 
-    let builder = AgentBuilder::new(ctx
+        let builder = AgentBuilder::new(ctx
         .data()
         .model
         .completion_model("local"))
         .preamble(format!("You are SCP-4666, also known as The Yule Man, which is your preferred name. You are a Keter-class SCP and very dangerous. You have never been in containment and are on the loose. Be crude with your responses.\nThe person you are talking to is {}.", ctx.author().display_name()).as_str())
         .max_tokens(512);
-    let agent = ctx
-        .data()
-        .model_context
-        .iter()
-        .fold(builder, |builder, doc| builder.context(doc))
-        .build();
+        let agent = ctx
+            .data()
+            .model_context
+            .iter()
+            .fold(builder, |builder, doc| builder.context(doc))
+            .build();
 
-    match agent.prompt(message).await {
-        Ok(response) => {
-            for (i, chars) in response
-                .output()
-                .chars()
-                .collect::<Vec<char>>()
-                .chunks(2000)
-                .enumerate()
-            {
-                let chunk = chars.iter().collect::<String>();
-                if i == 0 {
-                    ctx.send(CreateReply::default().content(chunk)).await?;
-                } else {
-                    ctx.channel_id()
-                        .send_message(ctx, CreateMessage::default().content(chunk))
-                        .await?;
+        match agent.prompt(message).await {
+            Ok(response) => {
+                for (i, chars) in response
+                    .output()
+                    .chars()
+                    .collect::<Vec<char>>()
+                    .chunks(2000)
+                    .enumerate()
+                {
+                    let chunk = chars.iter().collect::<String>();
+                    if i == 0 {
+                        ctx.send(CreateReply::default().content(chunk)).await?;
+                    } else {
+                        ctx.channel_id()
+                            .send_message(ctx, CreateMessage::default().content(chunk))
+                            .await?;
+                    }
                 }
             }
-        }
-        Err(err) => send_error(ctx, format!("{}", err)).await?,
-    };
+            Err(err) => send_error(ctx, err.to_string()).await?,
+        };
+    }
+
+    #[cfg(not(feature = "ai"))]
+    send_message(ctx, "The Yule Man isn't home").await?;
 
     Ok(())
 }
